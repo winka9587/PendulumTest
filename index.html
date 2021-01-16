@@ -1,0 +1,368 @@
+﻿<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>Demo</title>
+</head>
+<body>
+    <!--
+    <button id="ResetCamera">reset camera</button>
+    <button id="wind_button">wind</button>
+    
+    <input id="InputFile" type="file">
+    <div>
+        <a>读取的数据:</a>
+        <p id="DataList"></p>
+    </div>-->
+</body>
+</html>
+<script src="./js/jquery.js"></script>
+<script src="./js/jodex.js"></script>
+<script type="module">
+
+    import * as THREE from './js/three.js-master/build/three.module.js';
+    import { Pendulum } from './js/pendulum.js';
+    import { CatmullRomCurve3 } from './js/three.js-master/src/extras/curves/CatmullRomCurve3.js';
+    import { OrbitControls } from './js/three.js-master/examples/jsm/controls/OrbitControls.js';
+    import { DragControls } from './js/three.js-master/examples/jsm/controls/DragControls.js';
+    import { GridHelper } from './js/three.js-master/src/helpers/GridHelper.js';
+    import { GUI } from './js/three.js-master/examples/jsm/libs/dat.gui.module.js';
+
+    
+
+    const line_scale = 1;//绳长的缩放
+
+    //单摆的初始值
+    const mass_initial = 1.0;
+    const c_a_initial = 0;
+    const c_d_initial = 0.1;
+    const wind_x_initial = 0;
+    const wind_y_initial = 0;
+    const wind_z_initial = 0;
+    const time_step_initial = 0.005;
+    const is_record_path_initial = true;
+    const theta_initial = 0.8//0.8;
+    const phi_initial = 0.7;
+    const pendulum_param = {
+        c_a:c_a_initial,
+        c_d:c_d_initial,
+        wind:new THREE.Vector3(wind_x_initial,wind_y_initial,wind_z_initial),
+        time_step:time_step_initial,
+        theta:theta_initial,
+        phi:phi_initial
+    }
+    
+    var go = false;
+
+    //基础场景组件
+    const scene = new THREE.Scene();
+    const main_camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    const renderer = new THREE.WebGLRenderer(
+        {
+            antialias:true,
+            //alpha:true
+        }
+    );
+    const canvas_scale = 1;
+    renderer.setSize(window.innerWidth*canvas_scale, window.innerHeight*canvas_scale);
+    document.body.appendChild(renderer.domElement);
+
+    //立方体test
+     const geometry = new THREE.BoxGeometry();
+     const material = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
+    // const cube = new THREE.Mesh(geometry, material);
+    // scene.add(cube);
+
+    //球
+    const geometry_sphere = new THREE.SphereGeometry( 0.01, 32, 32 );
+    const material_sphere = new THREE.MeshBasicMaterial( {color: 0xffff00} );
+    let sphere_head = new THREE.Mesh( geometry_sphere, material_sphere );
+    let sphere_tail = new THREE.Mesh( geometry_sphere, material );
+    scene.add( sphere_head );
+    scene.add( sphere_tail );
+
+
+    //网格
+    // const size = 10;
+    // const divisions = 10;
+    // const gridHelper = new THREE.GridHelper( size, divisions );
+    // gridHelper.rotateX(Math.PI/2);
+    // scene.add( gridHelper );
+
+    //坐标系
+    function drawline(v1,v2,length,input_color){
+        let line_material = new THREE.LineBasicMaterial( input_color );
+        let points = [];
+        points.push(v1);
+        points.push(v2);
+        let line_geometry = new THREE.BufferGeometry().setFromPoints( points );
+        let line = new THREE.Line( line_geometry, line_material );
+        return line;
+    }
+    const coordinate_length = 100;
+    scene.add(drawline(new THREE.Vector3( 0 , 0 , 0 ),new THREE.Vector3( 100 , 0 , 0 ),coordinate_length,{color: 0x00ff00}));//X
+    scene.add(drawline(new THREE.Vector3( 0 , 0 , 0 ),new THREE.Vector3( 0 , 100 , 0 ),coordinate_length,{color: 0xff0000}));//Y
+    scene.add(drawline(new THREE.Vector3( 0 , 0 , 0 ),new THREE.Vector3( 0 , 0 , 100 ),coordinate_length,{color: 0x0000ff}));//Z
+
+    //调整相机视角,z轴为up
+    main_camera.position.x = 0.5;
+    main_camera.position.y = 0.5;
+    main_camera.position.z = 0.5;
+    main_camera.up.set(0,0,1);
+
+    //视角控制
+    const orbit_control = new OrbitControls(main_camera, renderer.domElement);//orbit控制器，使相机能够围绕一点转动
+    orbit_control.update();//控制器的更新必须在相机的参数改变之后
+    //orbit_control.dispose();//关闭视角控制
+
+
+    //pendulum测试
+    let pendulum = new Pendulum(pendulum_param);
+    console.log("param to create");
+    console.log(pendulum);
+    
+    sphere_head.position.copy(pendulum.segment.head.position);
+    sphere_tail.position.copy(pendulum.segment.tail.position.multiplyScalar(line_scale));
+
+    //摆绳
+    let pendulum_line = drawline(pendulum.segment.head.position,pendulum.segment.tail.position.multiplyScalar(line_scale));
+    scene.add(pendulum_line);
+
+    //轨迹记录
+    var path_in_scene = new THREE.Group();
+    scene.add(path_in_scene);
+
+    var is_record_path = is_record_path_initial;
+    var history_path = [];//存储历史轨迹的数组
+    history_path.push(pendulum.segment.tail.position.multiplyScalar(line_scale).clone());
+    const curve_material = new THREE.LineBasicMaterial( { color : 0xff0000 } );
+    
+    //gui
+    const params = {
+                run:go,
+                record_path:is_record_path_initial,
+                time_step:time_step_initial,
+                mass:mass_initial,
+				c_a: c_a_initial,
+				c_d: c_d_initial,
+				wind_x: wind_x_initial,
+				wind_y: wind_y_initial,
+                wind_z: wind_z_initial,
+                wind_clear:function(){
+                    console.log("wind_clear");
+                    params.wind_x = 0;
+                    params.wind_y = 0;
+                    params.wind_z = 0;
+                    pendulum.wind.copy(new THREE.Vector3(0,0,0));
+                    console.log(gui);
+                },
+                path_clear:function(){
+                    path_in_scene.clear();
+                },
+                reset_camera:function(){
+                    orbit_control.target = pendulum.segment.tail.position.clone();
+                },
+                change_speed:function(){
+                    console.log("change speed");
+                    pendulum.changespeed(new THREE.Vector3(1,1,0));
+                },
+                print_log:function(){
+                    console.log("wind:("+pendulum.wind.x+","+pendulum.wind.y+","+pendulum.wind.z+")");
+                    console.log("c_a:"+pendulum.c_a);
+                    console.log("c_d:"+pendulum.c_d);
+                    console.log("segment.c_a:"+pendulum.segment.c_a);
+                    console.log("segment.c_d:"+pendulum.segment.c_d);
+                    console.log("segment.air:("+pendulum.segment.air.x+","+pendulum.segment.air.y+","+pendulum.segment.air.z+")");
+                }
+			};
+    const gui = new GUI();
+    //var controlFolder = new gui.addFolder( 'Control' );
+    gui.add( params, 'record_path').onChange(function(value){
+        is_record_path = value;
+    });;
+    gui.add( params, 'run' ).onChange(function(value){
+        go = value;
+    });
+    gui.add( params, 'time_step').onChange(function(value){
+        pendulum.time_step = value;
+    });;
+    gui.add( params, 'mass').onChange(function(value){
+        pendulum.segment.mass = value;
+        console.log(pendulum);
+    });;
+    gui.add( params, 'c_a',0,1 ).step(0.01).onChange(function(value){
+        pendulum.c_a = value;
+        pendulum.updatefriction();
+    });;
+    gui.add( params, 'c_d', 0, 5 ).step(0.01).onChange( function ( value ) {
+        pendulum.c_d = value;
+        pendulum.updatefriction();
+    } );
+    gui.add( params, 'wind_x' ,-20,20).step(5).onChange(function(value){
+        console.log("wind x change");
+        console.log(pendulum.wind);
+        console.log(pendulum.segment.air);
+        pendulum.wind.setX(value);
+    });
+    gui.add( params, 'wind_y' ,-20,20).step(5).onChange(function(value){
+        console.log("wind y change");
+        console.log(pendulum.wind);
+        console.log(pendulum.segment.air);
+        pendulum.wind.setY(value);
+    });;
+    gui.add( params, 'wind_z' ,-20,20).step(5).onChange(function(value){
+        console.log("wind z change");
+        console.log(pendulum.wind);
+        console.log(pendulum.segment.air);
+        pendulum.wind.setZ(value);
+    });;
+    gui.add( params, 'wind_clear' );
+    gui.add( params, 'path_clear' );
+    gui.add( params, 'reset_camera' );
+    gui.add( params, 'change_speed' );
+    gui.add( params, 'print_log' );
+    gui.open();
+
+    
+    var last_phi,last_theta;
+    //上次位置,用于画轨迹
+    var last_pos = pendulum.segment.tail.position.clone();
+    //循环
+    function animate() {
+        requestAnimationFrame(animate);
+        
+        
+        if(go){
+            //输出摆球坐标
+            console.log("pos:("+ pendulum.segment.tail.position.x + ","
+                                + pendulum.segment.tail.position.y + ","
+                                + pendulum.segment.tail.position.z + ","
+            );
+
+            //假设在预测
+            //console.log("pos:("+pendulum.segment.tail.position.x+","+pendulum.segment.tail.position.y+","+pendulum.segment.tail.position.z+")");
+            //预测theta
+            //console.log("theta cal = "+Math.acos(pendulum.segment.tail.position.z/(-pendulum.segment.l)));
+            //预测phi
+            if(pendulum.segment.theta!=0.0){
+                var phi_cal;
+                if(pendulum.segment.tail.position.x!=0.0){
+                    phi_cal = Math.atan(pendulum.segment.tail.position.y/pendulum.segment.tail.position.x);
+                }else{
+                    if(pendulum.segment.tail.position.y>0 ){
+                        phi_cal = Math.PI/2;
+                    }else if( pendulum.segment.tail.position.y<0 ){
+                        phi_cal = -Math.PI/2;
+                    }
+                }
+                //console.log("phi cal = "+phi_cal);
+
+            }else{
+                alert("theta == 0");
+            }
+            
+
+            last_theta = Math.acos(pendulum.segment.tail.position.z/(-pendulum.segment.l));
+
+            
+
+            //console.log("theta real= "+pendulum.segment.theta);
+            //console.log("phi real= "+pendulum.segment.phi);
+            
+
+            //单摆更新
+            pendulum.step();
+            sphere_head.position.copy(pendulum.segment.head.position);
+            sphere_tail.position.copy(pendulum.segment.tail.position.multiplyScalar(1));
+
+            
+
+            let points = [];
+            points.push(pendulum.segment.head.position);
+            points.push(pendulum.segment.tail.position);
+            pendulum_line.geometry.setFromPoints( points );
+
+            //轨迹更新
+            if(is_record_path){
+                if(!last_pos.equals(pendulum.segment.tail.position)){
+                    history_path.push(pendulum.segment.tail.position.clone());
+                    last_pos = pendulum.segment.tail.position.clone();
+
+                    if(history_path.length>6){
+                        var curve = new THREE.CatmullRomCurve3( history_path );
+                        var curve_points = curve.getPoints( history_path.length*50 );
+                        const curve_geometry = new THREE.BufferGeometry().setFromPoints( curve_points );
+                        const curveObject = new THREE.Line( curve_geometry, curve_material );
+                        path_in_scene.add(curveObject);
+                        
+                        history_path = [];//清空数组
+                        history_path.push(last_pos.clone());//否则曲线与曲线之间会不连续
+                    }
+                    
+                }
+            }
+
+            
+        }
+        //控制器更新
+        orbit_control.update();
+        //渲染
+        renderer.render(scene, main_camera); 
+    }
+    animate();
+
+    var wind_open = false;
+    //事件处理
+    function click_test() {
+        if(!wind_open){
+            //console.log("click");
+            pendulum.wind.copy(new THREE.Vector3(5,5,0));
+            wind_open = true;
+        }else{
+            pendulum.wind.copy(new THREE.Vector3(0,0,0));
+            wind_open = false;
+        }
+        console.log(pendulum.wind);
+    }
+
+    //拖拽控制
+    // let drag_array = [];
+    // drag_array.push(sphere_head);
+    // const controls = new DragControls( drag_array, main_camera, renderer.domElement );
+    // // add event listener to highlight dragged objects
+    // controls.addEventListener( 'dragstart', function ( event ) {
+    //     console.log(event);
+    //     //event.object.material.emissive.set( 0xaaaaaa );
+    // } );
+
+    // controls.addEventListener( 'dragend', function ( event ) {
+    //     console.log(event);
+    //     //event.object.material.emissive.set( 0x000000 );
+    // } )
+
+    $(document).ready(function () {
+        $("#InputFile").on('change', function (source) {
+            let file = source.target.files[0];
+            let reader = new FileReader();
+            reader.onload = function (e) {
+                console.log(e.target.result);
+                let str = e.target.result;
+                console.log(str);
+                $("#DataList").append(str);
+            }
+            reader.readAsText(file);
+
+        });
+        $("#ResetCamera").on('click',function(source){
+            orbit_control.target = pendulum.segment.tail.position.clone();
+        })
+        $("#wind_button").on('click',click_test);
+
+
+        //默认有wind
+        //$("#wind_button").click();
+    });
+
+</script>
