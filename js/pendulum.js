@@ -1,6 +1,6 @@
 
 
-import * as THREE from './js/three.js-master/build/three.module.js';
+import * as THREE from 'PendulumTest/js/three.js-master/build/three.module.js';
 
 
 class Joint {//关节类
