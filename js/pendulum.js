@@ -13,7 +13,7 @@ class Joint {//关节类
     }
     calc() {
         let prevSpeed = this.speed.clone();//记录上一帧速度
-        this.speed.subVectors( this.position , this.prevPosition);//当前位置减上一帧位置得到当前速度
+        this.speed.subVectors( this.position , this.prevPosition);//当前位置减上一帧位置得到当前速度#
         this.prevPosition.copy( this.position );//当前位置保存为上一帧,供下次计算速度使用
         this.acceleration.subVectors( this.speed,prevSpeed);//加速度等于速度相减
     }
